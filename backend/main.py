@@ -7,6 +7,9 @@ from fastapi.responses import FileResponse, Response
 import os
 import mysql.connector
 from dotenv import load_dotenv
+import time
+import random
+import threading
 
 # Selenium
 from selenium import webdriver
@@ -17,12 +20,18 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 from fastapi import WebSocket
+from selenium.common.exceptions import InvalidSessionIdException, WebDriverException
+from selenium.common.exceptions import TimeoutException
+
+
+
 
 clients = []
-SCRAPER_STATUS = "Select SRO"
+
 
 SCRAPER_RUNNING = False
 SCRAPER_STOPPED = False
+LAST_REQUEST_TIME = 0
 
 import asyncio
 
@@ -30,8 +39,11 @@ async def broadcast_status(message):
     global SCRAPER_STATUS
     SCRAPER_STATUS = message
 
-    for client in clients:
-        await client.send_text(message)
+    for client in clients[:]:   # copy list
+        try:
+            await client.send_text(message)
+        except:
+            clients.remove(client)
         
         
 
@@ -71,7 +83,23 @@ app.add_middleware(
 
 driver = None
 wait = None
+driver_lock = threading.Lock()
 
+def keep_driver_alive():
+    global driver
+
+    while True:
+        try:
+            if driver:
+                driver.execute_script("return 1")
+        except Exception as e:
+            print("Driver died → restarting:", e)
+            
+            with driver_lock:
+                restart_driver()
+
+        time.sleep(60)  # every 1 minute
+        
 
 @app.on_event("startup")
 def start_browser():
@@ -79,18 +107,45 @@ def start_browser():
     global driver, wait
 
     print("\nStarting Selenium Browser...\n")
+    
+    
+    
+    
+    
+    
+# Run Chrome (popup)
 
     # chrome_options = Options()
-    # chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     
+    # chrome_options.add_argument(
+    #     "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+    # )
+    # # Required for stable headless mode
+    # chrome_options.add_argument("--disable-gpu")
+    # chrome_options.add_argument("--window-size=1920,1080")
+    
+###############################################
+
+# Run Chrome in background (no popup)
     chrome_options = Options()
 
-    # Run Chrome in background (no popup)
+    chrome_options.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+    )
+
+    # ✅ ADD THIS LINE (MAIN FIX)
     chrome_options.add_argument("--headless=new")
 
     # Required for stable headless mode
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
+
+
+    
+    
+    
+    
+    
 
     # Prevent automation detection
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
@@ -98,12 +153,16 @@ def start_browser():
     # Prevent some crashes
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    
+    
         
 
     driver = webdriver.Chrome(
         service=Service(ChromeDriverManager().install()),
         options=chrome_options
     )
+    
+    time.sleep(random.uniform(2, 4))
 
     driver.get("https://esearch.delhigovt.nic.in/Complete_search_without_regyear.aspx")
 
@@ -116,6 +175,8 @@ def start_browser():
     )
 
     print("Website opened and SRO dropdown loaded")
+    
+    threading.Thread(target=keep_driver_alive, daemon=True).start()
 
 
 # ---------------------------------------------------
@@ -161,35 +222,115 @@ def get_status():
 
 @app.get("/sro")
 def get_sro():
+    global driver, wait
 
-    print("\nGET /sro\n")
+    driver, wait = safe_get_driver()
 
-    dropdown = wait.until(
-        EC.presence_of_element_located(
-            (By.XPATH, "//select[contains(@id,'ddl_sro')]")
+    try:
+        driver.get("https://esearch.delhigovt.nic.in/Complete_search_without_regyear.aspx")
+
+        dropdown = wait.until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//select[contains(@id,'ddl_sro')]")
+            )
         )
-    )
+
+    except Exception as e:
+        print("Error loading SRO:", e)
+        restart_driver()
+
+        driver, wait = safe_get_driver()
+
+        dropdown = wait.until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//select[contains(@id,'ddl_sro')]")
+            )
+        )
 
     options = dropdown.find_elements(By.TAG_NAME, "option")
 
-    sro_list = []
-
-    print("Available SRO:\n")
-
-    for i, opt in enumerate(options):
-
-        txt = opt.text.strip()
-
-        print(i, txt)
-
-        if txt and "Select" not in txt:
-            sro_list.append(txt)
-
-    print("\n----------------------------------\n")
+    sro_list = [
+        opt.text.strip()
+        for opt in options
+        if opt.text.strip() and "Select" not in opt.text
+    ]
 
     return sro_list
 
 
+#driver health check
+
+
+
+def is_driver_alive():
+    global driver
+
+    try:
+        if driver is None:
+            return False
+
+        # this will fail if session is dead
+        driver.execute_script("return 1")
+        return True
+
+    except (InvalidSessionIdException, WebDriverException):
+        print("Driver session is dead")
+        return False
+    
+def restart_driver():
+    global driver, wait
+
+    try:
+        if driver:
+            driver.quit()
+    except:
+        pass
+
+    print("Restarting Selenium driver...")
+
+    chrome_options = Options()
+    
+    
+    chrome_options.add_argument("--headless=new")  # ✅ no popout
+    
+    
+    
+    chrome_options.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    )
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+
+    driver = webdriver.Chrome(
+        service=Service(ChromeDriverManager().install()),
+        options=chrome_options
+        
+    )
+    time.sleep(2)
+
+    driver.get("https://esearch.delhigovt.nic.in/Complete_search_without_regyear.aspx")
+
+    # ✅ IMPORTANT FIX
+    wait = WebDriverWait(driver, 30)
+
+    print("Driver restarted successfully")
+    
+    
+def safe_get_driver():
+    global driver, wait
+
+    if not is_driver_alive():
+        restart_driver()
+
+    try:
+        driver.execute_script("return 1")
+    except:
+        restart_driver()
+
+    wait = WebDriverWait(driver, 30)
+    return driver, wait
 # ---------------------------------------------------
 # GET LOCALITIES
 # ---------------------------------------------------
@@ -197,20 +338,55 @@ def get_sro():
 @app.get("/localities")
 def get_localities(sro_name: str):
 
+    global driver, wait
+    driver, wait = safe_get_driver()
+
+
+    try:
+        
+        
+        time.sleep(random.uniform(2, 4))
+        driver.get("https://esearch.delhigovt.nic.in/Complete_search_without_regyear.aspx")
+    except:
+        restart_driver()
+
     print("\nSRO selected:", sro_name)
 
-    sro_dropdown = wait.until(
-        EC.presence_of_element_located(
-            (By.XPATH, "//select[contains(@id,'ddl_sro')]")
+    try:
+        sro_dropdown = wait.until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//select[contains(@id,'ddl_sro')]")
+            )
         )
-    )
+    except:
+        print("Driver crashed while selecting SRO → restarting")
+        restart_driver()
+
+        sro_dropdown = wait.until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//select[contains(@id,'ddl_sro')]")
+            )
+        )
 
     Select(sro_dropdown).select_by_visible_text(sro_name)
+
+    # 🔥 wait for ASP.NET postback
+    time.sleep(random.uniform(3, 5))
 
     locality_dropdown = wait.until(
         EC.presence_of_element_located(
             (By.XPATH, "//select[contains(@id,'ddl_loc')]")
         )
+    )
+
+    # 🔥 WAIT until options are populated
+    wait.until(lambda d: len(
+        locality_dropdown.find_elements(By.TAG_NAME, "option")
+    ) > 1)
+    
+    # re-locate (avoid stale element)
+    locality_dropdown = driver.find_element(
+        By.XPATH, "//select[contains(@id,'ddl_loc')]"
     )
 
     options = locality_dropdown.find_elements(By.TAG_NAME, "option")
@@ -252,7 +428,7 @@ async def start_scraper_api(data: ScraperRequest):
 
     await broadcast_status("Auto captcha detection start")
 
-    import threading
+    
 
  
     global SCRAPER_RUNNING
@@ -266,8 +442,33 @@ async def start_scraper_api(data: ScraperRequest):
 
     def run_scraper():
         global SCRAPER_RUNNING
+        
+        global LAST_REQUEST_TIME
+        
+        global driver
+
+        current_time = time.time()
+
+        if current_time - LAST_REQUEST_TIME < 10:
+            print("Cooling down to avoid IP block...")
+            time.sleep(10)
+
+        LAST_REQUEST_TIME = time.time()
+
+     
+        driver, _ = safe_get_driver()
+
+        
+
         try:
-            start_scraper(driver, data.sro_name, data.locality_name)
+            with driver_lock:
+                start_scraper(
+                    driver,
+                    data.sro_name,
+                    data.locality_name,
+                    broadcast_status,
+                    lambda: SCRAPER_STOPPED
+                )
         finally:
             SCRAPER_RUNNING = False
 
@@ -359,7 +560,7 @@ def check_scrape_status(sro_name, locality_name):
 # ---------------------------------------------------
 
 @app.get("/records")
-def get_records(
+async def get_records(
     sro_name: str,
     locality_name: str,
     year: str = None,
@@ -373,76 +574,137 @@ def get_records(
     max_area: str = None,
     property_type: str = None
 ):
-
+    
     global SCRAPER_RUNNING
     global SCRAPER_STOPPED
+    
+    # ✅ ADD HERE (VERY IMPORTANT)
+    sro_name = sro_name.strip()
+    locality_name = locality_name.strip()
+
+    print("INPUT SRO:", repr(sro_name))
+    print("INPUT LOCALITY:", repr(locality_name))
+    
+    
+    
+    
 
     # Check if data already exists
     status = check_scrape_status(sro_name, locality_name)
+    
 
     if status == "NOT_STARTED":
 
-        asyncio.run(
-            broadcast_status("No data available in DB, starting scraping")
-        )
-
-               
+        await broadcast_status("No data available in DB, starting scraping")
         
-       
+      
 
         if not SCRAPER_RUNNING:
 
             SCRAPER_RUNNING = True
             SCRAPER_STOPPED = False
+            
+            global driver
+            driver, _ = safe_get_driver()
 
+            
             def run_scraper():
                 global SCRAPER_RUNNING
+                global LAST_REQUEST_TIME
+
+                
+
+                current_time = time.time()
+
+                if current_time - LAST_REQUEST_TIME < 10:
+                    print("Cooling down to avoid IP block...")
+                    time.sleep(10)
+
+                LAST_REQUEST_TIME = time.time()
                 
                 
+                global driver
+                driver, _ = safe_get_driver()
+
                 try:
-                    start_scraper(driver, sro_name, locality_name)
+                    with driver_lock:
+                        start_scraper(
+                            driver,
+                            sro_name,
+                            locality_name,
+                            broadcast_status,
+                            lambda: SCRAPER_STOPPED
+                        )
                 finally:
                     SCRAPER_RUNNING = False
 
-            import threading
+           
             threading.Thread(target=run_scraper).start()
 
         return []
 
     elif status == "IN_PROGRESS":
 
-        asyncio.run(
-            broadcast_status(
+        await broadcast_status(
                 "Scraping previously interrupted. Resuming scraping..."
             )
-        )
+        
 
         if not SCRAPER_RUNNING:
 
             SCRAPER_RUNNING = True
             SCRAPER_STOPPED = False
+            
+            
+        
+  
 
             def run_scraper():
                 global SCRAPER_RUNNING
+                global LAST_REQUEST_TIME
+                global driver
+                
+                
+
+               
+                
+
+                current_time = time.time()
+
+                if current_time - LAST_REQUEST_TIME < 10:
+                    print("Cooling down to avoid IP block...")
+                    time.sleep(10)
+
+                LAST_REQUEST_TIME = time.time()
+                
+                # ✅ CRITICAL FIX
+                driver, _ = safe_get_driver()
+
+
                 try:
-                    start_scraper(driver, sro_name, locality_name)
+                    with driver_lock:
+                        start_scraper(
+                            driver,
+                            sro_name,
+                            locality_name,
+                            broadcast_status,
+                            lambda: SCRAPER_STOPPED
+                        )
                 finally:
                     SCRAPER_RUNNING = False
 
-            import threading
+            
             threading.Thread(target=run_scraper).start()
+            
+        
 
     elif status == "COMPLETED":
 
-        asyncio.run(
-            broadcast_status(
+        await broadcast_status(
                 "Fetching data of this SRO and locality. Completed data stored in DB"
             )
-        )
         
-
-
-        
+ 
 
 
     db = mysql.connector.connect(
@@ -457,9 +719,8 @@ def get_records(
     query = """
     SELECT *
     FROM property_records
-    WHERE sro_name=%s
-    AND locality_name=%s
-    AND reg_no IS NOT NULL
+    WHERE TRIM(sro_name)=%s
+    AND TRIM(locality_name)=%s
     """
 
     params = [sro_name, locality_name]
@@ -526,7 +787,7 @@ def get_records(
 
     db.close()
 
-    return rows 
+    return rows if rows else []
 
 
 

@@ -1,3 +1,30 @@
+# Node
+node_modules/
+frontend/build/
+
+# Python
+__pycache__/
+*.pyc
+
+# Env
+.env
+backend/.env
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+
+# Docker
+*.pid
+*.sock
+
+# Captcha temp
+captcha.png
+backend/captcha.png
+
+
 # Environment variables
 .env
 captcha.png
