@@ -37,25 +37,6 @@ The system uses **FastAPI + Selenium + EasyOCR + React** to automate scraping an
 
 ---
 
-# System Requirements
-
-Before running the project install:
-
-• Python **3.10+**
-• Node.js **18+**
-• MySQL Server
-• Google Chrome
-
-Check installation:
-
-```bash
-python --version
-node -v
-npm -v
-```
-
----
-
 # Project Structure
 
 ```
@@ -80,131 +61,145 @@ frontend/
 
 ---
 
-# 1. Clone Project
+# Start (Need Python , SQL and Node.js in system )
 
-```
-git clone <repo-url>
-cd project
-```
+# System Requirements
 
----
+Before running the project install:
 
-# 2. Backend Setup
+• Python **3.13+**
+• Node.js **18+**
+• MySQL Server
+• Google Chrome + chromedriver.exe
 
-Go to backend folder:
 
-```
-cd backend
-```
+Install Node.js
+👉 Download from official site:
+🔗 https://nodejs.org/
+choose: Download LTS (Recommended) version
 
-Install Python dependencies:
+After install, verify:
+node -v
+npm -v
 
-```
-pip install -r requirements.txt
-```
 
----
+Install Python (3.10+)
+👉 Download from official site:
+🔗 https://www.python.org/downloads/
 
-# 3. Environment Variables
+⚠️IMPORTANT during install:
+✔ Tick this option:
+Add Python to PATH
 
-Copy example file:
+After install, verify:
+python --version
 
-```
-cp .env.example .env
-```
 
-Edit `.env` file:
+Install MySQL Server
+👉 Download from official site:
+🔗 https://dev.mysql.com/downloads/mysql/
+choose: MySQL Installer for Windows (recommended)
 
-```
-DB_HOST=localhost
-DB_USER=root
-DB_PASSWORD=yourpassword
-DB_NAME=delhi_property
-```
+👉 Download workbench from official site:
+🔗 https://dev.mysql.com/downloads/workbench/
 
----
 
-# 4. Database Setup
+# SETUP STEPS
 
-Create MySQL database:
+STEP 1. Install Chrome + Install chromedriver (IMPORTANT)
 
-```
-CREATE DATABASE delhi_property;
-```
+👉 Since your project uses Selenium:
+Install Google Chrome ( IF ALREADY HAVE THEN ) Download matching ChromeDriver OR use webdriver-manager
 
-Create table:
 
-```
+i. Methond to check Chrome version :-
+Go to chrome -> Setting -> About Chrome 
+
+ii. Download matching ChromeDriver version :-
+https://googlechromelabs.github.io/chrome-for-testing/
+
+iii. Extract chromedriver.zip, then inside you will see chromedriver.exe
+
+Then delete chromedriver.exe from Project(Yuktic_DORIS) and past your downloaded chromedriver.exe in same place (Copy chromedriver.exe and Put it inside project: backend/chromedriver.exe)
+
+
+
+
+STEP 2. MySQL Workbench
+
+i. Create Database:-
+
+CREATE DATABASE delhi_property_scraper;
+USE delhi_property_scraper;
+
+ii. Create Table
+
 CREATE TABLE property_records (
-id INT AUTO_INCREMENT PRIMARY KEY,
-
-reg_no VARCHAR(50),
-reg_date DATE,
-
-first_party TEXT,
-second_party TEXT,
-
-property_address TEXT,
-
-area VARCHAR(100),
-
-deed_type VARCHAR(255),
-property_type VARCHAR(255),
-
-sro_name VARCHAR(255),
-locality_name VARCHAR(255),
-
-scrape_status VARCHAR(50)
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    reg_no VARCHAR(50),
+    reg_date DATE,
+    first_party TEXT,
+    second_party TEXT,
+    property_address TEXT,
+    area VARCHAR(100),
+    deed_type TEXT,
+    property_type VARCHAR(50),
+    sro_name VARCHAR(150),
+    locality_name VARCHAR(150),
+    scrape_status ENUM('IN_PROGRESS','COMPLETED'),
+    UNIQUE (reg_no, sro_name, locality_name)
 );
-```
 
----
 
-# 5. Run Backend Server
+iii. Change .env.example name to .env and then change its details, then place it inside backend
 
-Start FastAPI server:
 
-```
+
+
+STEP 3.  Go to backend folder
+
+i. RUN in PowerShell: python -m venv venv
+ii. Then Run Windows: venv\Scripts\activate
+    Mac/Linux: source venv/bin/activate
+iii. pip install -r requirements.txt
+iv. uvicorn main:app --reload
+
+
+
+
+
+STEP 4. Run backend :-
 uvicorn main:app --reload
-```
 
----
+Backend runs on:
+http://localhost:8000
 
-# 6. Frontend Setup
 
-Open new terminal and go to frontend folder:
 
-```
-cd frontend
-```
 
-Install dependencies:
+STEP 5. Go to frontend folder
 
-```
-npm install
-```
+i. RUN in PowerShell: npm install
+ii. npm start
 
-Install axios if needed:
-
-```
-npm install axios
-```
-
-Start React application:
-
-```
-npm start
-```
-
-Frontend will run at:
-
-```
+Frontend runs on:
 http://localhost:3000
-```
 
+
+
+STEP 6. Connect Backend & DB
+
+In your backend Folder change env, ensure DB config:
+
+host="localhost"
+user="root"
+password="your_password"
+database="delhi_property_scraper"
 ---
 
-# 7. How to Use
+
+
+# How to Use
 
 1. Open the frontend UI
 2. Select **SRO**
@@ -237,8 +232,6 @@ If records are not present in the database, the scraper will automatically start
 
 ---
 
-# Author
-Devesh Sharma
 =======
 # Yuktic_DORIS
 Delhi Property Scraper using FastAPI, Selenium, EasyOCR, React
