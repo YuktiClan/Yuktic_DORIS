@@ -13,6 +13,7 @@ from selenium.webdriver.support import expected_conditions as EC
 # Used for time delays, file operations, regex cleaning,
 # threading tasks, and date conversions.
 import time
+import random
 import os
 import re
 import threading
@@ -51,8 +52,7 @@ from dotenv import load_dotenv
 # -----------------------------------------------------------
 # Used for accessing scraper control flags and
 # sending live status updates to frontend.
-import main
-from main import broadcast_status
+
 
 # -----------------------------------------------------------
 # ASYNC SUPPORT
@@ -78,7 +78,21 @@ from selenium.common.exceptions import NoAlertPresentException
 reader = easyocr.Reader(["en"], gpu=False)
 
 
-def start_scraper(driver, sro_name, locality_name):
+
+def send_status(msg, broadcast_status):
+    try:
+        asyncio.run(broadcast_status(msg))
+    except RuntimeError:
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        loop.create_task(broadcast_status(msg))
+        
+        
+def start_scraper(driver, sro_name, locality_name, broadcast_status, is_stopped):
     # Import timeout exception locally to avoid namespace conflicts
     from selenium.common.exceptions import TimeoutException
 
@@ -96,7 +110,7 @@ def start_scraper(driver, sro_name, locality_name):
 
     print("\nContinuing with existing browser session\n")
 
-    asyncio.run(broadcast_status("Auto captcha detection start"))
+    send_status("Auto captcha detection start",broadcast_status )
 
     # -----------------------------------------------------------
     # CAPTCHA FILE PATH SETUP
@@ -207,17 +221,40 @@ def start_scraper(driver, sro_name, locality_name):
         )
 
         if not captcha_img:
-            print("Captcha not present on page")
-            return
+            print("Captcha not present → refreshing only")
 
+            refresh_captcha()
+
+            for _ in range(3):
+                captcha_img = driver.find_elements(
+                    By.XPATH, "//img[contains(@src,'CaptchaImage')]"
+                )
+
+                if captcha_img:
+                    break
+
+                print("Retrying captcha load...")
+                time.sleep(2)
+
+            if not captcha_img:
+                print("Captcha still missing after retries ❌")
+                return False   # 🔥 important
+
+        # ✅ ALWAYS define captcha_src
         captcha_src = captcha_img[0].get_attribute("src")
 
-        captcha_data = requests.get(captcha_src).content
+        try:
+            captcha_data = requests.get(captcha_src, timeout=10).content
 
-        with open(CAPTCHA_PATH, "wb") as f:
-            f.write(captcha_data)
+            with open(CAPTCHA_PATH, "wb") as f:
+                f.write(captcha_data)
 
-        print("Captcha downloaded")
+            print("Captcha downloaded ✅")
+            return True   # 🔥 important
+
+        except Exception as e:
+            print("Captcha download failed:", e)
+            return False
 
     # -----------------------------------------------------------
     # CAPTCHA REFRESH HANDLER
@@ -270,7 +307,14 @@ def start_scraper(driver, sro_name, locality_name):
 
             time.sleep(3)
 
-            download_captcha()
+            if not download_captcha():
+                print("Retrying captcha download...")
+
+                for _ in range(2):
+                    time.sleep(2)
+                    if download_captcha():
+                        break
+            time.sleep(random.uniform(1, 3))
             return
 
         try:
@@ -291,10 +335,27 @@ def start_scraper(driver, sro_name, locality_name):
             time.sleep(1)
 
         except:
-            print("Refresh button not found, waiting for page recovery...")
-            time.sleep(8)
+            print("Refresh button not found → FULL RESET")
 
-        download_captcha()
+            driver.delete_all_cookies()
+            driver.get("https://esearch.delhigovt.nic.in/Complete_search_without_regyear.aspx")
+
+            wait.until(
+                EC.presence_of_element_located(
+                    (By.XPATH, "//select[contains(@id,'ddl_sro')]")
+                )
+            )
+
+            ensure_selection()
+
+        if not download_captcha():
+            print("Retrying captcha download...")
+
+            for _ in range(2):
+                time.sleep(2)
+                if download_captcha():
+                    break
+        time.sleep(random.uniform(1, 3))
 
 
     # -----------------------------------------------------------
@@ -319,7 +380,7 @@ def start_scraper(driver, sro_name, locality_name):
 
             Select(sro_dropdown).select_by_visible_text(selected_sro_name)
 
-            time.sleep(2)
+            time.sleep(random.uniform(2, 4))
 
         # check locality
         locality_dropdown = wait.until(
@@ -336,7 +397,7 @@ def start_scraper(driver, sro_name, locality_name):
 
             Select(locality_dropdown).select_by_visible_text(selected_locality_name)
 
-            time.sleep(2)
+            time.sleep(random.uniform(2, 4))
 
     # -----------------------------------------------------------
     # DATABASE CONNECTION
@@ -382,6 +443,8 @@ def start_scraper(driver, sro_name, locality_name):
     )
 
     Select(sro_dropdown).select_by_visible_text(selected_sro_name)
+    
+    time.sleep(random.uniform(2, 4))
 
     # wait until locality dropdown refreshes
     wait.until(
@@ -399,6 +462,7 @@ def start_scraper(driver, sro_name, locality_name):
     )
 
     Select(locality_dropdown).select_by_visible_text(selected_locality_name)
+    time.sleep(random.uniform(2, 4))
 
     # wait until locality is actually selected
     wait.until(
@@ -413,22 +477,71 @@ def start_scraper(driver, sro_name, locality_name):
     # -----------------------------------------------------------
     # DOWNLOAD INITIAL CAPTCHA
     # -----------------------------------------------------------
-    download_captcha()
+    
+    
+    # ✅ ADD THIS BLOCK HERE
+    if not driver.find_elements(By.XPATH, "//input[contains(@id,'txtcaptcha')]"):
+        print("Captcha input not found → resetting page")
+
+        driver.delete_all_cookies()
+
+        driver.get("https://esearch.delhigovt.nic.in/Complete_search_without_regyear.aspx")
+
+        wait.until(
+            EC.presence_of_element_located(
+                (By.XPATH, "//select[contains(@id,'ddl_sro')]")
+            )
+        )
+
+        ensure_selection()
+
+    # ✅ EXISTING CODE
+
+    if not download_captcha():
+        print("Retrying captcha download...")
+
+        for _ in range(2):
+            time.sleep(2)
+            if download_captcha():
+                break
+    time.sleep(random.uniform(1, 3))
 
     attempt = 0
     max_attempts = 3
 
     while True:
+        time.sleep(random.uniform(3, 6))
 
-        if main.SCRAPER_STOPPED:
+        if is_stopped():
             print("Scraper stopped by user")
-            asyncio.run(broadcast_status("Scraper stopped by user"))
+
+            send_status("Scraper stopped by user", broadcast_status)
+
+            driver.delete_all_cookies()
+            driver.get("https://esearch.delhigovt.nic.in/Complete_search_without_regyear.aspx")
+
+            wait.until(
+                EC.presence_of_element_located(
+                    (By.XPATH, "//select[contains(@id,'ddl_sro')]")
+                )
+            )
+
+            print("Returned to clean search page after stop")
+
             return
 
         if attempt < max_attempts:
 
+            # ✅ NORMAL OCR FLOW
             if not os.path.exists(CAPTCHA_PATH):
-                download_captcha()
+                if not download_captcha():
+                    print("Retrying captcha download...")
+
+                    for _ in range(2):
+                        time.sleep(2)
+                        if download_captcha():
+                            break
+                time.sleep(random.uniform(1, 3))
 
             ocr_text = read_captcha_ocr(CAPTCHA_PATH)
 
@@ -437,40 +550,124 @@ def start_scraper(driver, sro_name, locality_name):
             if len(ocr_text) < 6:
                 print("OCR result less than 6 characters, refreshing captcha...")
                 refresh_captcha()
-
+                time.sleep(random.uniform(2, 4))
                 continue
 
             captcha = ocr_text
             print("Using OCR captcha:", captcha)
 
+
+        elif attempt == max_attempts:
+
+            print("OCR failed → forcing fresh captcha page")
+
+            driver.delete_all_cookies()
+            driver.get("https://esearch.delhigovt.nic.in/Complete_search_without_regyear.aspx")
+
+            wait.until(
+                EC.presence_of_element_located(
+                    (By.XPATH, "//select[contains(@id,'ddl_sro')]")
+                )
+            )
+
+            ensure_selection()
+            time.sleep(3)
+
+            # ✅ FORCE CAPTCHA TO LOAD
+            for _ in range(3):
+                if not download_captcha():
+                    print("Retrying captcha download...")
+
+                    for _ in range(2):
+                        time.sleep(2)
+                        if download_captcha():
+                            break
+
+                if os.path.exists(CAPTCHA_PATH):
+                    print("Captcha ready for frontend ✅")
+                    break
+
+                print("Retrying captcha download...")
+                time.sleep(2)
+
+            attempt += 1
+            continue
+
+
         else:
 
-            from main import SCRAPER_STATUS
+            # 🔥 MANUAL CAPTCHA MODE
+            
 
-            SCRAPER_STATUS = "Auto captcha failed. Enter captcha manually"
+            send_status("Auto captcha failed. Enter captcha manually", broadcast_status)
+            
 
-            asyncio.run(
-                broadcast_status("Auto captcha Failed , Enter captcha manually")
-            )
-            print("\nOCR failed 3 times. Waiting for captcha from frontend...")
+
+            print("\nWaiting for captcha from frontend...")
 
             if not os.path.exists(CAPTCHA_PATH):
-                download_captcha()
-                threading.Thread(target=delete_captcha, daemon=True).start()
+                if not download_captcha():
+                    print("Retrying captcha download...")
+
+                    for _ in range(2):
+                        time.sleep(2)
+                        if download_captcha():
+                            break
+                time.sleep(2)
 
             captcha_file = os.path.join(BASE_DIR, "captcha_input.txt")
 
-            # wait until frontend sends captcha
+            start_time = time.time()
+
             while True:
                 if os.path.exists(captcha_file):
                     with open(captcha_file, "r") as f:
                         captcha = f.read().strip()
 
                     os.remove(captcha_file)
-                    print("Received captcha from frontend:", captcha)
+                    print("Received captcha:", captcha)
                     break
 
-                time.sleep(1)
+                if time.time() - start_time > 60:
+                    print("Timeout → refreshing captcha for user")
+
+                    refresh_captcha()
+
+                    for _ in range(3):
+                        if not download_captcha():
+                            print("Retrying captcha download...")
+
+                            for _ in range(2):
+                                time.sleep(2)
+                                if download_captcha():
+                                    break
+                        if os.path.exists(CAPTCHA_PATH):
+                            break
+                        time.sleep(2)
+
+                    send_status("Captcha expired. New captcha loaded.",broadcast_status)
+
+                    start_time = time.time()
+                    
+
+                    for _ in range(3):
+                        if not download_captcha():
+                            print("Retrying captcha download...")
+
+                            for _ in range(2):
+                                time.sleep(2)
+                                if download_captcha():
+                                    break
+                        if os.path.exists(CAPTCHA_PATH):
+                            break
+                        time.sleep(2)
+
+                    
+                    
+
+                    start_time = time.time()
+
+        time.sleep(3)
 
         captcha_box = wait.until(
             EC.presence_of_element_located(
@@ -485,6 +682,8 @@ def start_scraper(driver, sro_name, locality_name):
         if "Server Error in '/' Application" in driver.page_source:
             print("Website crashed before captcha submit. Reloading...")
 
+            driver.delete_all_cookies()
+
             driver.get("https://esearch.delhigovt.nic.in/Complete_search_without_regyear.aspx")
 
             wait.until(
@@ -495,6 +694,7 @@ def start_scraper(driver, sro_name, locality_name):
 
             ensure_selection()
             refresh_captcha()
+            time.sleep(random.uniform(2, 4))
             continue
         # -------------------------------------
         
@@ -504,7 +704,7 @@ def start_scraper(driver, sro_name, locality_name):
 
         driver.execute_script("arguments[0].scrollIntoView(true);", search_btn)
 
-        time.sleep(0.5)
+        time.sleep(random.uniform(3, 6))
 
         driver.execute_script("arguments[0].click();", search_btn)
 
@@ -528,7 +728,14 @@ def start_scraper(driver, sro_name, locality_name):
                 )
             )
 
-            download_captcha()
+            if not download_captcha():
+                print("Retrying captcha download...")
+
+                for _ in range(2):
+                    time.sleep(2)
+                    if download_captcha():
+                        break
+            time.sleep(random.uniform(1, 3))
 
             attempt += 1
             continue
@@ -577,7 +784,7 @@ def start_scraper(driver, sro_name, locality_name):
                     "Returned to search page. Please re-enter SRO and Locality."
                 )
 
-                asyncio.run(broadcast_status(status_message))
+                send_status(status_message, broadcast_status)
 
                 print("No records found for this SRO and Locality")
 
@@ -608,10 +815,30 @@ def start_scraper(driver, sro_name, locality_name):
 
                 return
 
-            print("Captcha probably incorrect")
+            print("Manual captcha incorrect → refreshing captcha")
 
-            attempt += 1
-            download_captcha()
+            # reset attempt so it stays in manual mode
+            attempt = max_attempts + 1  
+
+            # refresh captcha properly
+            refresh_captcha()
+
+            # ensure captcha is downloaded
+            for _ in range(3):
+                if not download_captcha():
+                    print("Retrying captcha download...")
+
+                    for _ in range(2):
+                        time.sleep(2)
+                        if download_captcha():
+                            break
+                if os.path.exists(CAPTCHA_PATH):
+                    print("New captcha ready for frontend ✅")
+                    break
+                time.sleep(2)
+
+            # notify frontend again
+            send_status("Captcha incorrect. Please try again.", broadcast_status)
             continue
 
         
@@ -623,18 +850,29 @@ def start_scraper(driver, sro_name, locality_name):
 
             print("Captcha incorrect (no results table)")
 
-            attempt += 1
+            if attempt > max_attempts:
+                attempt = max_attempts + 1   # stay in manual mode
+            else:
+                attempt += 1
+            
 
             time.sleep(2)
 
-            download_captcha()
+            if not download_captcha():
+                print("Retrying captcha download...")
+
+                for _ in range(2):
+                    time.sleep(2)
+                    if download_captcha():
+                        break
+            time.sleep(random.uniform(1, 3))
 
             continue
 
         else:
 
             print("Captcha correct. Results loaded.")
-            asyncio.run(broadcast_status("Captcha correct. Start fetching data"))
+            send_status("Captcha correct. Start fetching data", broadcast_status)
 
             time.sleep(8)
 
@@ -737,13 +975,16 @@ def start_scraper(driver, sro_name, locality_name):
     data = []
 
     while True:
+        time.sleep(random.uniform(3, 7))
 
-        if main.SCRAPER_STOPPED:
+        if is_stopped():
             print("Scraper stopped by user")
 
-            asyncio.run(broadcast_status("Scraper stopped by user"))
+            send_status("Scraper stopped by user", broadcast_status)
 
             # go back to search page
+            driver.delete_all_cookies()
+
             driver.get("https://esearch.delhigovt.nic.in/Complete_search_without_regyear.aspx")
 
             wait.until(
@@ -756,7 +997,7 @@ def start_scraper(driver, sro_name, locality_name):
 
             return
 
-        asyncio.run(broadcast_status("Fetching property records"))
+        send_status("Fetching property records", broadcast_status)
         
         print("\nScraping page...")
 
@@ -838,7 +1079,7 @@ def start_scraper(driver, sro_name, locality_name):
 
             driver.execute_script("arguments[0].click();", next_btn[0])
 
-            time.sleep(4)
+            time.sleep(random.uniform(4, 8))
 
             continue
 
@@ -851,6 +1092,8 @@ def start_scraper(driver, sro_name, locality_name):
             print("\nMoving to previous year...\n")
 
             driver.execute_script("arguments[0].click();", prev_year[0])
+            
+            time.sleep(random.uniform(5, 10))
 
             # wait until results table reloads
             wait.until(
@@ -868,9 +1111,10 @@ def start_scraper(driver, sro_name, locality_name):
         print("\nNo more years available. Returning to search page...")
 
         # go back to search page
+        driver.delete_all_cookies()
+
         driver.get("https://esearch.delhigovt.nic.in/Complete_search_without_regyear.aspx")
 
-        # wait for SRO dropdown again
         wait.until(
             EC.presence_of_element_located(
                 (By.XPATH, "//select[contains(@id,'ddl_sro')]")
@@ -879,12 +1123,12 @@ def start_scraper(driver, sro_name, locality_name):
 
         print("\nReturned to starting page. Ready for next SRO search.\n")
 
-        asyncio.run(broadcast_status("Returned to search page. Please re-enter SRO and Locality"))
+        send_status("Returned to search page. Please re-enter SRO and Locality", broadcast_status)
 
         break
 
     print("\nScraping complete")
-    asyncio.run(broadcast_status("Scraping completed"))
+    send_status("Scraping completed", broadcast_status)
     print("Total rows:", len(data))
 
 
