@@ -37,6 +37,13 @@ function App() {
 
   const [captchaLoaded, setCaptchaLoaded] = useState(false);
 
+  useEffect(() => {
+  if (!Array.isArray(records)) {
+    console.log("⚠️ FIXING INVALID RECORDS:", records);
+    setRecords([]);
+  }
+}, [records]);
+
   const startScraper = async () => {
 
     if (!sro || !locality) {
@@ -49,7 +56,7 @@ function App() {
       setStatus("Starting scraper...");
 
       const res = await axios.post(
-        "http://127.0.0.1:8000/start-scraper",
+        "http://localhost:8000/start-scraper",
         {
           sro_name: sro,
           locality_name: locality
@@ -76,7 +83,7 @@ function App() {
     try {
 
       await axios.post(
-        "http://127.0.0.1:8000/submit-captcha",
+        "http://localhost:8000/submit-captcha",
         { captcha: captchaValue }
       );
 
@@ -100,7 +107,7 @@ function App() {
     try {
 
       const res = await axios.get(
-        "http://127.0.0.1:8000/captcha",
+        "http://localhost:8000/captcha",
         { responseType: "blob" }
       );
 
@@ -125,7 +132,7 @@ function App() {
     try {
 
       const res = await axios.get(
-        "http://127.0.0.1:8000/sro"
+        "http://localhost:8000/sro"
       );
 
       setSroList(res.data || []);
@@ -144,7 +151,7 @@ function App() {
     try {
 
       const res = await axios.get(
-        `http://127.0.0.1:8000/localities?sro_name=${sroName}`
+        `http://localhost:8000/localities?sro_name=${sroName}`
       );
 
       setLocalityList(res.data || []);
@@ -174,7 +181,7 @@ function App() {
         try {
 
           const res = await axios.get(
-            "http://127.0.0.1:8000/captcha",
+            "http://localhost:8000/captcha",
             { responseType: "blob" }
           );
 
@@ -233,20 +240,29 @@ function App() {
       if (propertyType) params.property_type = propertyType;
 
       const res = await axios.get(
-        "http://127.0.0.1:8000/records",
+        "http://localhost:8000/records",
         { params }
       );
 
+      // 🔥 ADD 
+      console.log("FULL API RESPONSE:", res.data);
+      console.log("IS ARRAY:", Array.isArray(res.data));
+
       // DEBUG
-      console.log("Total records from API:", res.data.length);
+      console.log(
+        "Total records from API:",
+        Array.isArray(res.data) ? res.data.length : 0
+      );
 
       // ALWAYS update records first
-      setRecords(res.data);
+      setRecords(Array.isArray(res.data) ? res.data : []);
 
-      if (res.data.length === 0) {
+      const safeData = Array.isArray(res.data) ? res.data : [];
+
+      if (safeData.length === 0) {
         setStatus("No data in DB. Scraper started. Data will appear shortly...");
       } else {
-        setStatus(`Data loaded from database (${res.data.length} records)`);
+        setStatus(`Data loaded from database (${safeData.length} records)`);
       }
 
       
@@ -264,7 +280,7 @@ function App() {
   const stopScraper = async () => {
     try {
 
-      await axios.post("http://127.0.0.1:8000/stop-scraper");
+      await axios.post("http://localhost:8000/stop-scraper");
 
       setStatus("Scraper stopped");
       setScraperRunning(false);
@@ -675,7 +691,7 @@ function App() {
         <div className="table-container">
 
           <p className="record-count">
-            Total Records: {records ? records.length : 0}
+            Total Records: {Array.isArray(records) ? records.length : 0}
           </p>
 
           <table>
@@ -700,7 +716,8 @@ function App() {
 
             <tbody>
 
-              {records.map((r, i) => (
+              {Array.isArray(records) &&
+                records.map((r, i) => (
                 <tr key={r.id}>
 
                   <td>{r.reg_no}</td>
