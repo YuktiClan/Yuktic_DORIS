@@ -47,8 +47,8 @@ backend/
 ├── main.py
 ├── scraper.py
 ├── requirements.txt
-├── .env.example
-└── captcha.png
+├── .env
+└── chromedriver.exe
 
 frontend/
 │
